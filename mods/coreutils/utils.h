@@ -39,7 +39,7 @@ const char path_separator = '/';
 
 std::string utf8_encode(const std::string& s);
 std::string utf8_encode(const std::wstring& s);
-std::wstring utf8_decode(const std::string& s);
+std::wstring utf8_decode_wide(const std::string& txt);
 int utf8_decode(const std::string& utf8, uint32_t* target);
 
 #if 0
@@ -135,7 +135,7 @@ std::string urlencode(const std::string& s, const std::string& chars);
 std::string urldecode(const std::string& s, const std::string& chars = "");
 
 std::string htmldecode(const std::string& source, bool stripTags = false);
-std::wstring jis2unicode(uint8_t* text);
+std::wstring jis2unicode_legacy(uint8_t* text);
 
 void sleepms(unsigned ms);
 void sleepus(unsigned us);

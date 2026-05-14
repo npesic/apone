@@ -20,11 +20,8 @@ if(NOT TARGET coreutils)
 	add_subdirectory(../coreutils coreutils)
 endif()
 
-if(NOT TARGET freetype)
-  add_subdirectory(../freetype freetype)
-endif()
-include_directories(${FREETYPE_INCLUDE_DIR})
-
+find_package(Freetype REQUIRED)
+include_directories(${FREETYPE_INCLUDE_DIRS})
 
 if(APPLE)
   find_library(COCOA_LIBRARY Cocoa)
@@ -118,5 +115,5 @@ endforeach()
 include_directories(.. grappix/freetype-gl)
 
 add_library(grappix ${SOURCE_FILES})
-target_link_libraries(grappix coreutils image tween freetype ${EXTRA_LIBS})
+target_link_libraries(grappix coreutils image tween ${FREETYPE_LIBRARIES} ${EXTRA_LIBS})
 target_include_directories(grappix PRIVATE ..)

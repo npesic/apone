@@ -33,7 +33,7 @@ LineEditor::LineEditor(Console& console, function<int(int)> filter, int width,
 
 void LineEditor::setString(const std::string& text)
 {
-    line = utf8_decode(text);
+    line = utf8_decode_wide(text);
     if (xpos > (int)line.size())
         xpos = (int)line.size();
     refresh();
@@ -231,7 +231,7 @@ FullEditor::FullEditor(Console& console) : console(console)
 
 void FullEditor::setComment(const std::string& text)
 {
-    lines = split(utf8_decode(text), wstring(L"\n"));
+    lines = split(utf8_decode_wide(text), wstring(L"\n"));
     commentLines = lines.size();
     redraw(true, 0);
 }
@@ -405,7 +405,7 @@ std::string FullEditor::getResult()
 
 void FullEditor::setString(const std::string& text)
 {
-    lines = split(utf8_decode(text), wstring(L"\n"));
+    lines = split(utf8_decode_wide(text), wstring(L"\n"));
     redraw(true, 0);
 }
 

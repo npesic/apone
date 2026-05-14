@@ -293,7 +293,7 @@ void Font::render_text(const RenderTarget &target, const std::string &text, floa
 	if(text == "")
 		return;
 
-	auto t = utf8_decode(text);
+	auto t = utf8_decode_wide(text);
 	auto buf = cache.get(t);
 	if(buf.text.empty()) {
 		buf = make_text(t);
@@ -312,7 +312,7 @@ int Font::get_width(const string &text, float scale) const {
 
 vec2i Font::get_size(const string &t, float scale) const {
 
-	auto text = utf8_decode(t);
+	auto text = utf8_decode_wide(t);
 
 	if(text.empty())
 		return vec2i(0,0);

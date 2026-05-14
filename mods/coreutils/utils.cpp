@@ -92,7 +92,7 @@ std::vector<std::string> text_wrap(const std::string& t, int width,
     }
     return lines;
 }
-std::wstring jis2unicode(uint8_t* text) {
+std::wstring jis2unicode_legacy(uint8_t* text) {
     static uint16_t jis_table[65536];
     static bool init = false;
     if (!init) {
@@ -413,7 +413,7 @@ int utf8_decode(const std::string& utf8, uint32_t* target) {
     return ptr - target;
 }
 
-std::wstring utf8_decode(const std::string& txt) {
+std::wstring utf8_decode_wide(const std::string& txt) {
     std::wstring result;
 
     uint32_t codepoint;
