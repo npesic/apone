@@ -1,4 +1,4 @@
-/* ===========================================================================
+/* ============================================================================
  * Freetype GL - A C OpenGL Freetype engine
  * Platform:    Any
  * WWW:         http://code.google.com/p/freetype-gl/
@@ -55,13 +55,20 @@ const struct {
 } FT_Errors[] =
 #include FT_ERRORS_H
 
+static FT_Library library = NULL;
 
-
+static void
+texture_font_library_init( void )
+{
+    if( library == NULL )
+    {
+        FT_Init_FreeType( &library );
+    }
+}
 
 // ------------------------------------------------- texture_font_load_face ---
 int
-texture_font_load_face( FT_Library * library,
-                        const char * filename,
+texture_font_load_face( const char * filename,
                         const float size,
                         FT_Face * face )
 {
@@ -72,37 +79,12 @@ texture_font_load_face( FT_Library * library,
                          (int)((0.0)      * 0x10000L),
                          (int)((1.0)      * 0x10000L) };
 
-    assert( library );
-    assert( filename );
-    assert( size );
-
-    /* Initialize library */
-    error = FT_Init_FreeType( library );
-    if( error )
-    {
-        fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                FT_Errors[error].code, FT_Errors[error].message);
-        return 0;
-    }
+    texture_font_library_init();
 
     /* Load face */
-    error = FT_New_Face( *library, filename, 0, face );
+    error = FT_New_Face( library, filename, 0, face );
     if( error )
     {
-        fprintf( stderr, "FT_Error (line %d, code 0x%02x) : %s\n",
-                 __LINE__, FT_Errors[error].code, FT_Errors[error].message);
-        FT_Done_FreeType( *library );
-        return 0;
-    }
-
-    /* Select charmap */
-    error = FT_Select_Charmap( *face, FT_ENCODING_UNICODE );
-    if( error )
-    {
-        fprintf( stderr, "FT_Error (line %d, code 0x%02x) : %s\n",
-                 __LINE__, FT_Errors[error].code, FT_Errors[error].message );
-        FT_Done_Face( *face );
-        FT_Done_FreeType( *library );
         return 0;
     }
 
@@ -110,10 +92,7 @@ texture_font_load_face( FT_Library * library,
     error = FT_Set_Char_Size( *face, (int)(size*64), 0, 72*hres, 72 );
     if( error )
     {
-        fprintf( stderr, "FT_Error (line %d, code 0x%02x) : %s\n",
-                 __LINE__, FT_Errors[error].code, FT_Errors[error].message );
         FT_Done_Face( *face );
-        FT_Done_FreeType( *library );
         return 0;
     }
 
@@ -122,7 +101,6 @@ texture_font_load_face( FT_Library * library,
 
     return 1;
 }
-
 
 // ------------------------------------------------------ texture_glyph_new ---
 texture_glyph_t *
@@ -187,7 +165,6 @@ void
 texture_font_generate_kerning( texture_font_t *self )
 {
     size_t i, j;
-    FT_Library library;
     FT_Face face;
     FT_UInt glyph_index, prev_index;
     texture_glyph_t *glyph, *prev_glyph;
@@ -196,7 +173,7 @@ texture_font_generate_kerning( texture_font_t *self )
     assert( self );
 
     /* Load font */
-    if( !texture_font_load_face( &library, self->filename, self->size, &face ) )
+    if( !texture_font_load_face( self->filename, self->size, &face ) )
     {
         return;
     }
@@ -214,9 +191,6 @@ texture_font_generate_kerning( texture_font_t *self )
             prev_glyph = *(texture_glyph_t **) vector_get( self->glyphs, j );
             prev_index = FT_Get_Char_Index( face, prev_glyph->charcode );
             FT_Get_Kerning( face, prev_index, glyph_index, FT_KERNING_UNFITTED, &kerning );
-            // printf("%c(%d)-%c(%d): %ld\n",
-            //       prev_glyph->charcode, prev_glyph->charcode,
-            //       glyph_index, glyph_index, kerning.x);
             if( kerning.x )
             {
                 // 64 * 64 because of 26.6 encoding AND the transform matrix used
@@ -227,7 +201,6 @@ texture_font_generate_kerning( texture_font_t *self )
         }
     }
     FT_Done_Face( face );
-    FT_Done_FreeType( library );
 }
 
 
@@ -238,7 +211,6 @@ texture_font_new( texture_atlas_t * atlas,
                   const float size)
 {
     texture_font_t *self = (texture_font_t *) malloc( sizeof(texture_font_t) );
-    FT_Library library;
     FT_Face face;
     FT_Size_Metrics metrics;
     
@@ -263,8 +235,6 @@ texture_font_new( texture_atlas_t * atlas,
     self->hinting = 1;
     self->kerning = 1;
     self->filtering = 1;
-    // FT_LCD_FILTER_LIGHT   is (0x00, 0x55, 0x56, 0x55, 0x00)
-    // FT_LCD_FILTER_DEFAULT is (0x10, 0x40, 0x70, 0x40, 0x10)
     self->lcd_weights[0] = 0x10;
     self->lcd_weights[1] = 0x40;
     self->lcd_weights[2] = 0x70;
@@ -273,13 +243,11 @@ texture_font_new( texture_atlas_t * atlas,
 
     /* Get font metrics at high resolution */
 
-    if( !texture_font_load_face( &library, self->filename, self->size*100, &face ) )
+    if( !texture_font_load_face( self->filename, self->size*100, &face ) )
     {
         return self;
     }
 
-    // 64 * 64 because of 26.6 encoding AND the transform matrix used
-    // in texture_font_load_face (hres = 64)
     self->underline_position = face->underline_position / (float)(64.0f*64.0f) * self->size;
     self->underline_position = round( self->underline_position );
     if( self->underline_position > -2 )
@@ -300,7 +268,6 @@ texture_font_new( texture_atlas_t * atlas,
     self->height = (metrics.height >> 6) / 100.0;
     self->linegap = self->height - self->ascender + self->descender;
     FT_Done_Face( face );
-    FT_Done_FreeType( library );
 
     /* -1 is a special glyph */
     texture_font_get_glyph( self, -1 );
@@ -339,7 +306,6 @@ texture_font_delete( texture_font_t *self )
 size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcodes )
 {
     size_t i, x, y, width, height, depth, w, h;
-    FT_Library library;
     FT_Error error;
     FT_Face face;
     FT_Glyph ft_glyph;
@@ -359,7 +325,7 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
     height = self->atlas->height;
     depth  = self->atlas->depth;
 
-    if( !texture_font_load_face( &library, self->filename, self->size, &face ) )
+    if( !texture_font_load_face( self->filename, self->size, &face ) )
     {
         return wcslen(charcodes);
     }
@@ -370,12 +336,9 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
         FT_Int32 flags = 0;
         int ft_bitmap_width = 0;
         int ft_bitmap_rows = 0;
-        /// int ft_bitmap_pitch = 0;
         int ft_glyph_top = 0;
         int ft_glyph_left = 0;
         glyph_index = FT_Get_Char_Index( face, charcodes[i] );
-        // WARNING: We use texture-atlas depth to guess if user wants
-        //          LCD subpixel rendering
 
         if( self->outline_type > 0 )
         {
@@ -408,10 +371,7 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
         error = FT_Load_Glyph( face, glyph_index, flags );
         if( error )
         {
-            fprintf( stderr, "FT_Error (line %d, code 0x%02x) : %s\n",
-                     __LINE__, FT_Errors[error].code, FT_Errors[error].message );
             FT_Done_Face( face );
-            FT_Done_FreeType( library );
             return wcslen(charcodes)-i;
         }
 
@@ -422,7 +382,6 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
             ft_bitmap       = slot->bitmap;
             ft_bitmap_width = slot->bitmap.width;
             ft_bitmap_rows  = slot->bitmap.rows;
-            /// ft_bitmap_pitch = slot->bitmap.pitch;
             ft_glyph_top    = slot->bitmap_top;
             ft_glyph_left   = slot->bitmap_left;
         }
@@ -430,85 +389,40 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
         {
             FT_Stroker stroker;
             FT_BitmapGlyph ft_bitmap_glyph;
-            error = FT_Stroker_New( library, &stroker );
-            if( error )
-            {
-                fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                        FT_Errors[error].code, FT_Errors[error].message);
-                FT_Done_Face( face );
-                FT_Stroker_Done( stroker );
-                FT_Done_FreeType( library );
-                return 0;
-            }
+            FT_Stroker_New( library, &stroker );
+            
             FT_Stroker_Set( stroker,
                             (int)(self->outline_thickness *64),
                             FT_STROKER_LINECAP_ROUND,
                             FT_STROKER_LINEJOIN_ROUND,
                             0);
-            error = FT_Get_Glyph( face->glyph, &ft_glyph);
-            if( error )
-            {
-                fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                        FT_Errors[error].code, FT_Errors[error].message);
-                FT_Done_Face( face );
-                FT_Stroker_Done( stroker );
-                FT_Done_FreeType( library );
-                return 0;
-            }
+            FT_Get_Glyph( face->glyph, &ft_glyph);
 
             if( self->outline_type == 1 )
             {
-                error = FT_Glyph_Stroke( &ft_glyph, stroker, 1 );
+                FT_Glyph_Stroke( &ft_glyph, stroker, 1 );
             }
             else if ( self->outline_type == 2 )
             {
-                error = FT_Glyph_StrokeBorder( &ft_glyph, stroker, 0, 1 );
+                FT_Glyph_StrokeBorder( &ft_glyph, stroker, 0, 1 );
             }
             else if ( self->outline_type == 3 )
             {
-                error = FT_Glyph_StrokeBorder( &ft_glyph, stroker, 1, 1 );
-            }
-            if( error )
-            {
-                fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                        FT_Errors[error].code, FT_Errors[error].message);
-                FT_Done_Face( face );
-                FT_Stroker_Done( stroker );
-                FT_Done_FreeType( library );
-                return 0;
+                FT_Glyph_StrokeBorder( &ft_glyph, stroker, 1, 1 );
             }
           
             if( depth == 1)
             {
-                error = FT_Glyph_To_Bitmap( &ft_glyph, FT_RENDER_MODE_NORMAL, 0, 1);
-                if( error )
-                {
-                    fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                            FT_Errors[error].code, FT_Errors[error].message);
-                    FT_Done_Face( face );
-                    FT_Stroker_Done( stroker );
-                    FT_Done_FreeType( library );
-                    return 0;
-                }
+                FT_Glyph_To_Bitmap( &ft_glyph, FT_RENDER_MODE_NORMAL, 0, 1);
             }
             else
             {
-                error = FT_Glyph_To_Bitmap( &ft_glyph, FT_RENDER_MODE_LCD, 0, 1);
-                if( error )
-                {
-                    fprintf(stderr, "FT_Error (0x%02x) : %s\n",
-                            FT_Errors[error].code, FT_Errors[error].message);
-                    FT_Done_Face( face );
-                    FT_Stroker_Done( stroker );
-                    FT_Done_FreeType( library );
-                    return 0;
-                }
+                FT_Glyph_To_Bitmap( &ft_glyph, FT_RENDER_MODE_LCD, 0, 1);
             }
             ft_bitmap_glyph = (FT_BitmapGlyph) ft_glyph;
             ft_bitmap       = ft_bitmap_glyph->bitmap;
             ft_bitmap_width = ft_bitmap.width;
             ft_bitmap_rows  = ft_bitmap.rows;
-            /// ft_bitmap_pitch = ft_bitmap.pitch;
             ft_glyph_top    = ft_bitmap_glyph->top;
             ft_glyph_left   = ft_bitmap_glyph->left;
             FT_Stroker_Done(stroker);
@@ -560,7 +474,6 @@ size_t texture_font_load_glyphs( texture_font_t * self, const wchar_t * charcode
         }
     }
     FT_Done_Face( face );
-    FT_Done_FreeType( library );
     texture_atlas_upload( self->atlas );
     texture_font_generate_kerning( self );
     return missed;
@@ -632,5 +545,3 @@ texture_font_get_glyph( texture_font_t * self,
     }
     return NULL;
 }
-
-
