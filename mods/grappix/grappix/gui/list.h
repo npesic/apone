@@ -19,7 +19,8 @@ public:
 	Rectangle layout(double position) {
 		Rectangle res = itemSize;
 		res.x = screenArea.x;
-		res.y = (screenArea.h) * position + screenArea.y;
+		// Push the baseline down by the item height so the text renders inside the box
+		res.y = (screenArea.h) * position + screenArea.y + itemSize.h;
 		return res;
 	}
 private:
@@ -73,7 +74,8 @@ public:
 		int ip = (int)dummy;
 
 		glEnable(GL_SCISSOR_TEST);
-		glScissor(area.x, screen.height() - area.h - area.y, area.w, area.h);
+		// Expand the scissor box upwards by 50 pixels to avoid clipping ascenders on the first line
+		glScissor(area.x, screen.height() - area.h - area.y - 50, area.w, area.h + 50);
 
 		if(renderer != 0) {
 			for(int i=0; i<n; i++) {
