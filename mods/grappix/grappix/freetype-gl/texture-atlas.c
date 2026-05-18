@@ -317,6 +317,7 @@ texture_atlas_upload( texture_atlas_t * self )
     }
 
     glBindTexture( GL_TEXTURE_2D, self->id );
+    glPixelStorei( GL_UNPACK_ALIGNMENT, 1 );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
@@ -342,4 +343,3 @@ texture_atlas_upload( texture_atlas_t * self )
                       0, GL_ALPHA, GL_UNSIGNED_BYTE, self->data );
     }
 }
-

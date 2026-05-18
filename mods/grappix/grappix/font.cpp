@@ -35,6 +35,7 @@ Font::Font(bool stfont) : size(32) {
 	ref->atlas = atlas;
 	atlas->width = static_font.tex_width;
 	atlas->height = static_font.tex_height;
+	atlas->depth = 1;
 	atlas->id = 0;
 	atlas->data = static_font.tex_data;
     texture_atlas_upload(atlas);
@@ -350,4 +351,3 @@ void TextBuf::destroy() {
 }
 
 }
-
