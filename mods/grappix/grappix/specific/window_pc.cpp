@@ -192,14 +192,10 @@ void Window::open(int w, int h, bool fs) {
 	//	mode->width /= 2;
 
 	if(_width <= 0) {
-		_width = modew;
-		if(!fs)
-			_width /= 2;
+		_width = modew / 2;
 	}
 	if(_height <= 0) {
-		_height = modeh;
-		if(!fs)
-			_height /= 2;
+		_height = modeh / 2;
 	}
 #endif
 
@@ -208,6 +204,9 @@ void Window::open(int w, int h, bool fs) {
 
 	//gwindow = glfwOpenWindow(_width, _height, mode.RedBits, mode.GreenBits, mode.BlueBits, 8, 8, 0, fs ? GLFW_FULLSCREEN : GLFW_WINDOW);
 	gwindow = glfwCreateWindow(_width, _height, title.c_str(), fs ? monitor : nullptr, nullptr);
+    if (monitor && !fs) {
+        glfwSetWindowPos(gwindow, (mode->width - _width) / 2, (mode->height - _height) / 2);
+    }
 	glfwMakeContextCurrent(gwindow);
 	//LOGD("%p WH %d %d", gwindow, _width, _height);
 
@@ -465,4 +464,4 @@ uint32_t Window::get_key(bool peek) {
 std::shared_ptr<Window> screenptr = make_shared<Window>();
 Window& screen = *screenptr;
 
-}
+} // namespace grappix
