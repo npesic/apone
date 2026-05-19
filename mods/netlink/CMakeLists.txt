@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.4)
+cmake_minimum_required(VERSION 3.12.0)
 project(cpp-mods.netlink)
 
 set(SOURCE_FILES core.cc smart_buffer.cc socket.cc socket_group.cc util.cc)

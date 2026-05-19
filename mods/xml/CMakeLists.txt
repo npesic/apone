@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.4)
+cmake_minimum_required(VERSION 3.12.0)
 project(cpp-mods.xml)
 
 set(SOURCE_FILES tinyxml2.cpp)

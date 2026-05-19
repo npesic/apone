@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.12.0)
 project(cpp-mods.fft)
 
 find_library(FFT_LIBRARY NAMES libfftw3f.a fftw3f)

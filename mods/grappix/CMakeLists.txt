@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.4)
+cmake_minimum_required(VERSION 3.12.0)
 project(cpp-mods.grappix)
 
 file(GLOB MAIN_FILES grappix/*.cpp grappix/gui/*.cpp)
