@@ -129,10 +129,10 @@ void setLevel(Level level)
 
 void setOutputFile(const std::string& fileName)
 {
-    std::lock_guard<std::mutex> lock(logm);
-    if (logFile)
-        fclose(logFile);
-    logFile = fopen(fileName.c_str(), "wb");
+    // std::lock_guard<std::mutex> lock(logm);
+    // if (logFile)
+    //     fclose(logFile);
+    // logFile = fopen(fileName.c_str(), "wb");
 }
 
 // void setLogSpace(const std::string &sourceFile, const std::string &function,
