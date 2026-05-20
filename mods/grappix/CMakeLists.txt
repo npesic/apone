@@ -20,8 +20,18 @@ if(NOT TARGET coreutils)
 	add_subdirectory(../coreutils coreutils)
 endif()
 
+# 1. Force CMake to inspect Apple Silicon Homebrew paths natively
+if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
+endif()
+
+# 2. Modernized system discovery 
 find_package(Freetype REQUIRED)
-include_directories(${FREETYPE_INCLUDE_DIRS})
+
+# 3. Handle the include tracking cleanly
+if(FREETYPE_FOUND)
+    include_directories(${FREETYPE_INCLUDE_DIRS})
+endif()
 
 if(APPLE)
   find_library(COCOA_LIBRARY Cocoa)
@@ -115,5 +125,5 @@ endforeach()
 include_directories(.. grappix/freetype-gl)
 
 add_library(grappix ${SOURCE_FILES})
-target_link_libraries(grappix coreutils image tween ${FREETYPE_LIBRARIES} ${EXTRA_LIBS})
+target_link_libraries(grappix coreutils image tween Freetype::Freetype  ${EXTRA_LIBS})
 target_include_directories(grappix PRIVATE ..)
