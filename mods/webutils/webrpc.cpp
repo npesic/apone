@@ -24,17 +24,20 @@ WebRPC::Job::~Job() {
 }
 
 bool WebRPC::Job::isDone() { 
-	lock_guard<mutex>{m};
+	//lock_guard<mutex>{m};
+	std::lock_guard<std::mutex> lock{m};
 	return done;
 }
 
 string WebRPC::Job::getData() {
-	lock_guard<mutex>{m};
+	//lock_guard<mutex>{m};
+	std::lock_guard<std::mutex> lock{m};
 	return data;
 }
 
 int WebRPC::Job::getReturnCode() { 
-	lock_guard<mutex>{m};
+	//lock_guard<mutex>{m};
+	std::lock_guard<std::mutex> lock{m};
 	return returnCode;
 }
 
@@ -59,7 +62,8 @@ void WebRPC::Job::urlCall(const string &url, const string &data) {
 	curl_easy_cleanup(curl);
 
 	{
-		lock_guard<mutex>{m};
+		//lock_guard<mutex>{m};
+		std::lock_guard<std::mutex> lock{m};
 		ongoingCalls--;
 		returnCode = rc;
 		done = true;

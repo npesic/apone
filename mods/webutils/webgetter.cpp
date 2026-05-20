@@ -67,12 +67,14 @@ WebGetter::Job::~Job() {
 }
 
 bool WebGetter::Job::isDone() const {
-	lock_guard<mutex>{m};
+	//lock_guard<mutex>{m};
+	std::lock_guard<std::mutex> lock{m};
 	return loaded;
 }
 
 int WebGetter::Job::getReturnCode() const {
-	lock_guard<mutex>{m};
+	//lock_guard<mutex>{m};
+	std::lock_guard<std::mutex> lock{m};
 	return returnCode;
 }
 
