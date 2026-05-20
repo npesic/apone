@@ -113,7 +113,7 @@ add_custom_target(grappix.shaders SOURCES ${SHADERS})
 file(MAKE_DIRECTORY .shaderx)
 file(MAKE_DIRECTORY .shader)
 foreach(SHADER ${SHADERS})
-	message(${SHADER})
+	# message(${SHADER})
 	get_filename_component(SHADERNAME ${SHADER} NAME)
 	add_custom_command(OUTPUT ${SHADERNAME}.c
 		COMMAND ${CMAKE_COMMAND} -E copy ${SHADER} .shader/${SHADERNAME}
