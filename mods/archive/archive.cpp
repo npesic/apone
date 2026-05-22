@@ -104,7 +104,7 @@ public:
 		archiveInfo.ArcName = (char*)fileName.c_str();
 		rarFile = RAROpenArchiveEx(&archiveInfo);
 		if(archiveInfo.OpenResult != 0) {
-			throw archive_exception("Bad RAR");
+			throw archive_exception((std::string("Bad RAR code ") + std::to_string(archiveInfo.OpenResult)).c_str());
 		};
 		currentPos = 0;
 		RHCode = RARReadHeaderEx(rarFile, &fileInfo);
