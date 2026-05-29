@@ -2,6 +2,7 @@
 #define AUDIOPLAYER_OSX_H
 
 #include <AudioToolbox/AudioToolbox.h>
+#include <mutex>
 
 class InternalPlayer {
 public:
@@ -38,7 +39,10 @@ public:
 
 	}
 
-    void play(std::function<void(int16_t*, int)> cb) { callback = cb; }
+    void play(std::function<void(int16_t*, int)> cb) { 
+        std::lock_guard<std::mutex> lock(callbackMutex);
+        callback = cb; 
+    }
 
 	void pause(bool on) {
 		if(on)
@@ -55,11 +59,13 @@ public:
 
 
 	static void fill_audio(void *ptr, AudioQueueRef aQueue, AudioQueueBuffer *buf) {
-		int count = buf->mAudioDataByteSize / 2;
-		int16_t *target = static_cast<int16_t*>(buf->mAudioData);
 		InternalPlayer *player = static_cast<InternalPlayer*>(ptr);
-        if(player->callback)
+        std::lock_guard<std::mutex> lock(player->callbackMutex);
+        if(player->callback) {
+            int count = buf->mAudioDataByteSize / 2;
+            int16_t *target = static_cast<int16_t*>(buf->mAudioData);
             player->callback(target, count);
+        }
 
 		OSStatus status = AudioQueueEnqueueBuffer(aQueue, buf, 0, NULL);
 	}
@@ -75,6 +81,7 @@ public:
 	}
 
 	std::function<void(int16_t *, int)> callback;
+    std::mutex callbackMutex;
 	bool quit;
 	int freq;
 	AudioQueueRef aQueue;

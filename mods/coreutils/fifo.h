@@ -38,10 +38,7 @@ public:
 
     ~Fifo()
     {
-        // Wait for writers to finish
-        quitting = true;
-        while (wantToWrite > 0)
-            cv.notify_all();
+        quit();
         if (buffer) {
             T* b = buffer.load();
             delete[] b;
@@ -50,9 +47,11 @@ public:
 
     void quit()
     {
-        quitting = true;
-        while (wantToWrite > 0)
-            cv.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(m);
+            quitting = true;
+        }
+        cv.notify_all();
     }
 
     Fifo& operator=(Fifo&) = delete;
@@ -91,6 +90,10 @@ public:
                 wantToWrite = count;
             cv.wait_for(lock, 100ms,
                         [=] { return left() >= count || quitting; });
+            if (quitting) {
+                wantToWrite = 0;
+                return;
+            }
         }
         wantToWrite = 0;
         if (quitting)
@@ -119,6 +122,10 @@ public:
                 wantToWrite = count;
             cv.wait_for(lock, 100ms,
                         [=] { return left() >= count || quitting; });
+            if (quitting) {
+                wantToWrite = 0;
+                return;
+            }
         }
         wantToWrite = 0;
         if (quitting)
@@ -178,6 +185,7 @@ public:
     int left() const { return bufSize - (bufPtr - buffer); }
     int size() const { return bufSize; }
     T* ptr() { return bufPtr; }
+    bool isQuitting() const { return quitting; }
 
 protected:
     std::mutex m;
@@ -249,4 +257,5 @@ private:
 };
 
 } // namespace utils
+
 

@@ -37,6 +37,8 @@ void WebJob::start(CURLM *curlm) {
 	curl_easy_setopt(curl, CURLOPT_HTTP200ALIASES, alias_list.get());
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunc);
 	curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
@@ -63,7 +65,11 @@ size_t WebJob::writeFunc(void *ptr, size_t size, size_t x, void *userdata) {
 	if(job->targetFile) {
 		job->targetFile.write(static_cast<uint8_t*>(ptr), size);
 	} else if(job->streamCb) {
-		job->streamCb(*job, static_cast<uint8_t*>(ptr), size);
+		// If the stream callback returns false (e.g. the fifo has been quit),
+		// return -1 to tell curl to abort the transfer immediately so that
+		// curl_multi_perform() unblocks and Web::run() can exit on quit.
+		if(!job->streamCb(*job, static_cast<uint8_t*>(ptr), size))
+			return -1;
 	} else {
 		unsigned pos = job->data.size();
 		job->data.resize(pos + size);
@@ -144,3 +150,4 @@ void WebJob::destroy() {
 }
 
 } // namespace webutils
+

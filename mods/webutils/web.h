@@ -153,7 +153,61 @@ public:
 
 	~Web() {
 		quit = true;
-		webThread.join();
+        if (curlm) {
+            curl_multi_wakeup(curlm);
+        }
+        // We cannot safely join the worker thread if it is blocked inside a
+        // curl write callback (e.g. stream_fifo->put() waiting for space).
+        // curl_multi_remove_handle is not safe to call from another thread
+        // while curl_multi_perform is running. The only safe option at process
+        // exit is to detach: the OS will clean up when the process exits.
+        // For non-exit destruction (RemoteLoader member), the stream_fifo will
+        // have been quit before we get here, so put() unblocks within 100ms
+        // and the thread exits naturally. We use a short timed join and detach
+        // if it doesn't finish in time.
+        if (webThread.joinable()) {
+            // Give the thread up to 300ms to exit cleanly (covers the 100ms
+            // wait_for timeout in Fifo::put plus scheduling slack).
+            // If it doesn't, detach and let the OS clean up.
+            using namespace std::chrono_literals;
+            std::mutex m2;
+            std::condition_variable cv2;
+            std::atomic<bool> done{false};
+            // We can't do a timed join directly in C++, so we move the thread
+            // to a detachable state and join from a watcher thread with timeout.
+            std::thread watcher([&]{
+                // Wait for the web thread to finish
+                webThread.join();
+                done = true;
+                cv2.notify_one();
+            });
+            {
+                std::unique_lock<std::mutex> lk(m2);
+                cv2.wait_for(lk, 300ms, [&]{ return done.load(); });
+            }
+            if (done) {
+                watcher.join();
+            } else {
+                // Thread is stuck (blocked in curl write callback).
+                // Detach both — OS will clean up at process exit.
+                watcher.detach();
+                webThread.detach();
+            }
+        }
+        if (curlm) {
+            // Skip per-handle curl_easy_cleanup: it blocks on SSL teardown.
+            // curl_multi_cleanup does a hard abort of all connections.
+            for (auto& job : jobs) {
+                if (job->curl) {
+                    job->curl = nullptr;
+                    std::lock_guard<std::mutex> lock(sm);
+                    runningWebJobs -= 1;
+                }
+            }
+            jobs.clear();
+            curl_multi_cleanup(curlm);
+            curlm = nullptr;
+        }
 	}
 
 	// This is run by the worker thread and polls curl for all outstanding actions
@@ -366,3 +420,4 @@ private:
 } // namespace webutils
 
 #endif // WEBUTILS_WEB_H
+
