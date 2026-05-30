@@ -119,10 +119,15 @@ public:
         std::string name;
     };
 
-    xmlnodelist all(const std::string &name = "") const {
+    /*xmlnodelist all(const std::string &name = "") const {
         if(!node)
             throw xml_exception("Invalid node");
         return xmlnodelist(node->FirstChildElement(name.c_str()), name);
+    }*/
+    xmlnodelist all(const std::string &name = "") const {
+    if(!node)
+        return xmlnodelist(nullptr, name);
+    return xmlnodelist(node->FirstChildElement(name.c_str()), name);
     }
 
     std::string attr(const std::string &name) const {
@@ -134,7 +139,9 @@ public:
     std::string text() const {
         if(!node)
             throw xml_exception("Invalid node");
-        return ((tinyxml2::XMLElement*)node)->GetText();
+        // return ((tinyxml2::XMLElement*)node)->GetText();
+	const char* t = ((tinyxml2::XMLElement*)node)->GetText();
+	return t ? t : "";
     }
 
 
