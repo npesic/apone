@@ -17,7 +17,54 @@ void WebJob::start(CURLM *curlm) {
 		targetFile = targetFile + ".download";
 	}
 
-	auto u = utils::urlencode(url, " #()");
+	// Build the final URL string to hand to libcurl.
+	//
+	// HTTP/HTTPS: percent-encode spaces and shell-special chars so the HTTP
+	// request line is well-formed. urlencode() is fine here.
+	//
+	// FTP: CURLFTPMETHOD_NOCWD requires libcurl to receive the *raw* path so
+	// it can issue a single RETR without CWD traversal. We must NOT
+	// percent-encode spaces (they must stay as literal spaces in the FTP
+	// command). However characters like '!' are rejected by libcurl's internal
+	// URL parser when they appear unescaped in the authority/path separator
+	// position. The correct approach is to let libcurl escape only the path
+	// component itself via curl_easy_escape(), leaving the scheme+host intact.
+	std::string u;
+	bool isFtp = url.size() > 4 && url.substr(0, 4) == "ftp:";
+	if (isFtp) {
+		// Split off scheme+host from path: ftp://host/path
+		// find the third slash (after ftp://)
+		auto pathStart = url.find('/', 6); // skip past "ftp://"
+		if (pathStart != std::string::npos) {
+			std::string hostPart = url.substr(0, pathStart);
+			std::string pathPart = url.substr(pathStart + 1); // without leading /
+			char* escaped = curl_easy_escape(curl, pathPart.c_str(), (int)pathPart.size());
+			// curl_easy_escape encodes everything including '/' which we need
+			// to preserve as path separators — so unescape %2F back to /
+			std::string escapedPath(escaped);
+			curl_free(escaped);
+			// Restore path separators
+			std::string finalPath;
+			finalPath.reserve(escapedPath.size());
+			size_t i = 0;
+			while (i < escapedPath.size()) {
+				if (escapedPath.size() - i >= 3 &&
+				    escapedPath[i] == '%' &&
+				    (escapedPath[i+1] == '2' || escapedPath[i+1] == '2') &&
+				    (escapedPath[i+2] == 'F' || escapedPath[i+2] == 'f')) {
+					finalPath += '/';
+					i += 3;
+				} else {
+					finalPath += escapedPath[i++];
+				}
+			}
+			u = hostPart + "/" + finalPath;
+		} else {
+			u = url; // fallback: pass as-is
+		}
+	} else {
+		u = utils::urlencode(url, " #()");
+	}
 
 	curl_slist *slist = NULL;
 
@@ -33,12 +80,24 @@ void WebJob::start(CURLM *curlm) {
 	LOGD("Curl Getting %s", u);
 	curl_easy_setopt(curl, CURLOPT_URL, u.c_str());
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list.get());
+	
+	// Force immediate IPv4 lookups to bypass the ~2.5 second macOS IPv6 dual-stack fallback timeout
+	curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+
+	// Optimization to eliminate sequential step-by-step CWD roundtrip stalls on deep FTP paths
+	curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, CURLFTPMETHOD_NOCWD);
+	curl_easy_setopt(curl, CURLOPT_FTP_USE_EPSV, 1L);
+	// Suppress the FTP SIZE command — costs ~500ms round-trip per transfer.
+	curl_easy_setopt(curl, CURLOPT_IGNORE_CONTENT_LENGTH, 1L);
+
 	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
 	curl_easy_setopt(curl, CURLOPT_HTTP200ALIASES, alias_list.get());
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+	
+
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFunc);
 	curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
@@ -65,9 +124,6 @@ size_t WebJob::writeFunc(void *ptr, size_t size, size_t x, void *userdata) {
 	if(job->targetFile) {
 		job->targetFile.write(static_cast<uint8_t*>(ptr), size);
 	} else if(job->streamCb) {
-		// If the stream callback returns false (e.g. the fifo has been quit),
-		// return -1 to tell curl to abort the transfer immediately so that
-		// curl_multi_perform() unblocks and Web::run() can exit on quit.
 		if(!job->streamCb(*job, static_cast<uint8_t*>(ptr), size))
 			return -1;
 	} else {
@@ -150,4 +206,5 @@ void WebJob::destroy() {
 }
 
 } // namespace webutils
+
 

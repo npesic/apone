@@ -17,9 +17,6 @@
 #include <atomic>
 #include <unordered_map>
 
-//#include <experimental/filesystem>
-//namespace fs = std::experimental::filesystem;
-
 namespace webutils {
 
 class WebJob;
@@ -50,7 +47,6 @@ public:
 	void wait(int timeout = -1);
 
 	void stop() {
-		// TODO: Should be atomic, but must be copyable
 		stopped = true;
 	}
 
@@ -61,7 +57,6 @@ public:
 	void setStreamCallback(StreamFunc cb) { streamCb = cb; }
 
 	std::string textResult() const {
-		// TODO: At _least_ UTF8 support here
 		return std::string(data.begin(), data.end());
 	}
 
@@ -94,8 +89,6 @@ protected:
 
 class Web {
 public:
-
-
 
 	template <typename... ARGS> struct WebJobImpl;
 
@@ -133,96 +126,105 @@ public:
 		FX cb;
 	};
 
-	
-	// Web
-	
-	// Sets 'baseUrl' as base for all web accesses.
-	// makes sure cacheDir is created
-	// Starts the worker thread
 	Web(const std::string &cacheDir = "", const std::string &baseUrl = "")
-	    :  baseUrl(baseUrl), cacheDir(cacheDir) {
+	    : baseUrl(baseUrl), cacheDir(cacheDir) {
 		std::lock_guard<std::mutex> lock(sm);
 		if(!initDone) {
 			curl_global_init(CURL_GLOBAL_ALL);
 			initDone = true;
 		}
-        utils::makedirs(cacheDir);
+		utils::makedirs(cacheDir);
 		curlm = curl_multi_init();
 		webThread = std::thread{&Web::run, this};
 	}
 
 	~Web() {
+		// Stop all in-flight jobs first so write callbacks return immediately.
+		{
+			std::lock_guard<std::mutex> lock(m);
+			for (auto& job : jobs) {
+				job->stop();
+				if (job->curl) {
+					curl_multi_remove_handle(curlm, job->curl);
+				}
+			}
+		}
+
+		// Signal run() to exit and wake it immediately.
 		quit = true;
-        if (curlm) {
-            curl_multi_wakeup(curlm);
-        }
-        // We cannot safely join the worker thread if it is blocked inside a
-        // curl write callback (e.g. stream_fifo->put() waiting for space).
-        // curl_multi_remove_handle is not safe to call from another thread
-        // while curl_multi_perform is running. The only safe option at process
-        // exit is to detach: the OS will clean up when the process exits.
-        // For non-exit destruction (RemoteLoader member), the stream_fifo will
-        // have been quit before we get here, so put() unblocks within 100ms
-        // and the thread exits naturally. We use a short timed join and detach
-        // if it doesn't finish in time.
-        if (webThread.joinable()) {
-            // Give the thread up to 300ms to exit cleanly (covers the 100ms
-            // wait_for timeout in Fifo::put plus scheduling slack).
-            // If it doesn't, detach and let the OS clean up.
-            using namespace std::chrono_literals;
-            std::mutex m2;
-            std::condition_variable cv2;
-            std::atomic<bool> done{false};
-            // We can't do a timed join directly in C++, so we move the thread
-            // to a detachable state and join from a watcher thread with timeout.
-            std::thread watcher([&]{
-                // Wait for the web thread to finish
-                webThread.join();
-                done = true;
-                cv2.notify_one();
-            });
-            {
-                std::unique_lock<std::mutex> lk(m2);
-                cv2.wait_for(lk, 300ms, [&]{ return done.load(); });
-            }
-            if (done) {
-                watcher.join();
-            } else {
-                // Thread is stuck (blocked in curl write callback).
-                // Detach both — OS will clean up at process exit.
-                watcher.detach();
-                webThread.detach();
-            }
-        }
-        if (curlm) {
-            // Skip per-handle curl_easy_cleanup: it blocks on SSL teardown.
-            // curl_multi_cleanup does a hard abort of all connections.
-            for (auto& job : jobs) {
-                if (job->curl) {
-                    job->curl = nullptr;
-                    std::lock_guard<std::mutex> lock(sm);
-                    runningWebJobs -= 1;
-                }
-            }
-            jobs.clear();
-            curl_multi_cleanup(curlm);
-            curlm = nullptr;
-        }
+		if (curlm) {
+			curl_multi_wakeup(curlm);
+		}
+
+		// JOIN — not detach. Detaching causes curl/audio races on destruction.
+		if (webThread.joinable()) {
+			webThread.join();
+		}
+
+		// Clean up curl only after the thread is fully stopped.
+		if (curlm) {
+			{
+				std::lock_guard<std::mutex> lock(m);
+				for (auto& job : jobs) {
+					if (job->curl) {
+						job->curl = nullptr;
+						std::lock_guard<std::mutex> lock2(sm);
+						runningWebJobs -= 1;
+					}
+				}
+				jobs.clear();
+			}
+			curl_multi_cleanup(curlm);
+			curlm = nullptr;
+		}
 	}
 
-	// This is run by the worker thread and polls curl for all outstanding actions
+	// Advanced background execution thread: mitigates nested lock recursion 
+	// by isolating user callback execution entirely outside of critical sections.
 	void run() {
 		while(!quit) {
 			int handleCount;
 			CURLMcode rc = CURLM_CALL_MULTI_PERFORM;
+			std::vector<std::shared_ptr<WebJob>> completedJobs;
+
 			{
 				std::lock_guard<std::mutex> lock(m);
 				while(rc == CURLM_CALL_MULTI_PERFORM)
 					rc = curl_multi_perform(curlm, &handleCount);
 				lastCount = handleCount;
+
+				// Harvest completions without running complex nested code under lock
+				CURLMsg *msg;
+				int msgs_left;
+				while ((msg = curl_multi_info_read(curlm, &msgs_left))) {
+					if (msg->msg == CURLMSG_DONE) {
+						auto it = jobs.begin();
+						while (it != jobs.end()) {
+							if ((*it)->curl == msg->easy_handle) {
+								completedJobs.push_back(*it);
+								it = jobs.erase(it);
+								break;
+							} else {
+								it++;
+							}
+						}
+					}
+				}
 			}
-			// TODO: Sleep longer, or use semaphore when there are no ongoing transfers
-			utils::sleepms(5);
+
+			// Execute user and hardware callbacks completely safe from cross-thread mutex recursion
+			for (auto& finishedJob : completedJobs) {
+				finishedJob->finish();
+			}
+			completedJobs.clear();
+
+			if (lastCount > 0) {
+				utils::sleepms(2);
+			} else {
+				utils::sleepms(20);
+			}
+
+			std::this_thread::yield();
 		}
 	}
 
@@ -240,7 +242,6 @@ public:
 	}
 
 	void poll() {
-
 		if(!m.try_lock())
 			return;
 		auto it = jobs.begin();
@@ -260,31 +261,7 @@ public:
 			} else
 				it++;
 		}
-
-		CURLMsg *msg;
-		std::vector<std::shared_ptr<WebJob>> toRemove;
-		do {
-			int count;
-			if((msg = curl_multi_info_read(curlm, &count))) {
-				if(msg->msg == CURLMSG_DONE) {
-					auto it = jobs.begin();
-					while(it != jobs.end()) {
-						if(it->get()->curl == msg->easy_handle) {
-							toRemove.push_back(*it);
-							it = jobs.erase(it);
-						} else
-							it++;
-					}
-				}
-			}
-
-		} while(msg);
-
 		m.unlock();
-
-		for(auto &r : toRemove) {
-			r->finish();
-		}
 	}
 
 	void removeJob(std::shared_ptr<WebJob> job) {
@@ -299,14 +276,13 @@ public:
 
 	template <typename FX> std::shared_ptr<WebJob> getFile(const std::string &url, FX cb) {
 		auto job = std::make_shared<WebJobImpl<FX, decltype(&FX::operator())>>(cb);
-
-        auto slash = url.find_last_of('/');
-        auto fileName = url.substr(slash+1);
-        auto pathName = url.substr(0, slash);
-        auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;");
-		fileName = utils::urlencode(fileName, ":/\\?;");
-        utils::makedirs(cacheDir / urlPart);
-		auto target = cacheDir / urlPart / fileName;
+		auto slash = url.find_last_of('/');
+		auto fileName = url.substr(slash+1);
+		auto pathName = url.substr(0, slash);
+		auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;!");
+		auto fileNameEncoded = utils::urlencode(fileName, ":/\\?;!");
+		utils::makedirs(cacheDir / urlPart);
+		auto target = cacheDir / urlPart / fileNameEncoded;
 		job->setTarget(target);
 		job->setUrl(url);
 		LOGD("target: %s", target.getName());
@@ -354,11 +330,11 @@ public:
 	}
 
 	bool inCache(const std::string &url) const {
-        auto slash = url.find_last_of('/');
-        auto fileName = url.substr(slash+1);
+		auto slash = url.find_last_of('/');
+		auto fileName = url.substr(slash+1);
 		fileName = utils::urlencode(fileName, ":/\\?;");
-        auto pathName = url.substr(0, slash);
-        auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;");
+		auto pathName = url.substr(0, slash);
+		auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;");
 		auto target = cacheDir / urlPart / fileName;
 		return utils::File::exists(target);
 	}
@@ -388,13 +364,11 @@ public:
 	}
 
 	template <typename FX> static std::shared_ptr<WebJob> get_url(const std::string &url, FX cb) {
-		//std::lock_guard<std::mutex> lock(sm);
 		return getInstance().get(url, cb);
 	}
 
 	static void pollAll() {
 		Web &w = getInstance();
-		//std::lock_guard<std::mutex> lock(sm);
 		w.poll();
 	}
 
