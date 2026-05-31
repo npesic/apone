@@ -15,10 +15,18 @@
 #include <unistd.h>
 #endif
 
-//#include <experimental/filesystem>
-//namespace fs = std::experimental::filesystem;
 #include "utils.h"
 #include "path.h"
+
+#include "log.h"
+
+// Forward declarations for Apple-specific platform bridging functions
+#ifdef __APPLE__
+namespace detail {
+    std::string getMacCacheDir();
+    std::string getMacConfigDir();
+}
+#endif
 
 class Environment
 {
@@ -63,36 +71,54 @@ public:
         return exeDir;
     }
 
-    /** User specific writable cache dir, normally $HOME/.config/$APPNAME */
+    /** User specific writable cache dir.
+     * macOS : ~/Library/Caches/<appname>         — sandbox-legal, no entitlement needed
+     * Linux : ~/.cache/<appname>                 — XDG convention
+     * Win   : same as exeDir                     — unchanged */
     static utils::path const& getCacheDir()
     {
-		const auto& homeDir = getHomeDir();
         std::lock_guard<std::mutex> lock(m);
         if (cacheDir.empty()) {
+#ifdef __APPLE__
+            // Call isolated Apple implementation
+            cacheDir = utils::path(detail::getMacCacheDir()) / appName;
+#else
+            const auto& homeDir = getHomeDir();
             cacheDir = homeDir / ".cache" / appName;
+#endif
             if (!utils::exists(cacheDir)) utils::makedirs(cacheDir);
         }
         return cacheDir;
     }
 
-    /** User specific config dir, normally $HOME/.config/$APPNAME */
+    /** User specific config dir.
+     * macOS : ~/Library/Application Support/<appname> — sandbox-legal, Time Machine backed
+     * Linux : ~/.config/<appname>                     — XDG convention
+     * Win   : same as exeDir                          — unchanged */
     static utils::path const& getConfigDir()
     {
-		const auto& homeDir = getHomeDir();
         std::lock_guard<std::mutex> lock(m);
         if (configDir.empty()) {
+#ifdef __APPLE__
+            // Call isolated Apple implementation
+            configDir = utils::path(detail::getMacConfigDir()) / appName;
+#else
+            const auto& homeDir = getHomeDir();
             configDir = homeDir / ".config" / appName;
+#endif
             if (!utils::exists(configDir)) utils::makedirs(configDir);
         }
         return configDir;
     }
 
     /** The application data directory.
-     * Normally $EXEDIR/../Resources on OSX or /usr/share/$APPNAME on *nix */
+     * macOS : Contents/Resources/  (exe is in Contents/MacOS/, so exe/../Resources)
+     * Linux : /usr/share/<appname> or exeDir if appName is unset
+     * Win   : exeDir */
     static utils::path getAppDir()
     {
-		const auto& exeDir = getExeDir();
-		std::lock_guard<std::mutex> lock(m);
+        const auto& exeDir = getExeDir();
+        std::lock_guard<std::mutex> lock(m);
         if (appDir.empty()) {
 #ifdef __APPLE__
             appDir = exeDir / ".." / "Resources";
@@ -104,20 +130,18 @@ public:
             else
                 appDir = "/usr/share/" + appName;
 #endif
-			LOGD("APPDIR %s", appDir);
-			if(utils::exists(appDir))
-				appDir = appDir;//fs::canonical(appDir);
-			else
-				appDir = exeDir;
+            LOGD("APPDIR %s", appDir);
+            if (!utils::exists(appDir))
+                appDir = exeDir;
         }
         return appDir;
     }
 
+    static std::string const& getAppName() { return appName; }
     static void setAppName(std::string const& aname) { appName = aname; }
 
 private:
-
-	inline static utils::path homeDir;
+    inline static utils::path homeDir;
     inline static utils::path exeDir;
     inline static utils::path configDir;
     inline static utils::path cacheDir;
