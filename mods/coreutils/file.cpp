@@ -23,6 +23,15 @@
 #    define PATH_MAX 4096
 #endif
 
+// Apple-specific directory helpers — implemented in environment_apple.mm
+// (compiled as Objective-C++ to keep Foundation.h out of .cpp TUs).
+#ifdef __APPLE__
+namespace detail {
+    std::string getMacCacheDir();
+    std::string getMacConfigDir();
+}
+#endif
+
 namespace utils {
 
 using namespace std;
@@ -303,21 +312,23 @@ static std::string getHome()
     return File::getHomeDir().getName();
 }
 
-/* #ifdef APP_NAME */
-/* static const char* appName = APP_NAME_STR; */
-/* #else */
-/* static const char* appName = "apone"; */
-/* #endif */
-
 const File& File::getCacheDir()
 {
     lock_guard<mutex> lock(fm);
     if (!cacheDir) {
+#ifdef __APPLE__
+        // NSCachesDirectory = ~/Library/Caches/
+        // Sandbox-legal; never triggers the Documents permission dialog.
+        // getenv("HOME") / ".cache" causes the dialog even when Documents
+        // is not the target — the sandbox intercepts all home traversal.
+        auto d = detail::getMacCacheDir() + "/" APP_NAME_STR;
+#else
         string home = getHome();
-#ifdef _WIN32
+#    ifdef _WIN32
         replace_char(home, '\\', '/');
-#endif
+#    endif
         auto d = home + "/.cache/" APP_NAME_STR;
+#endif
         LOGD("CACHE: %s", d);
         if (!exists(d))
             utils::makedirs(d);
@@ -330,12 +341,18 @@ const File& File::getConfigDir()
 {
     lock_guard<mutex> lock(fm);
     if (!configDir) {
+#ifdef __APPLE__
+        // NSApplicationSupportDirectory = ~/Library/Application Support/
+        // Sandbox-legal; Time Machine backed.
+        auto d = detail::getMacConfigDir() + "/" APP_NAME_STR;
+#else
         std::string home = getHome();
-#ifdef _WIN32
+#    ifdef _WIN32
         replace_char(home, '\\', '/');
-#endif
+#    endif
         auto d = home + "/.config/" APP_NAME_STR;
-        LOGD("CACHE: %s", d);
+#endif
+        LOGD("CONFIG: %s", d);
         if (!exists(d))
             utils::makedirs(d);
         configDir = File(d);
@@ -425,7 +442,6 @@ std::string File::resolvePath(const std::string& fileName)
 {
     char temp[PATH_MAX];
 #ifdef _WIN32
-    // if(GetFullPathNameA(fileName.c_str(), PATH_MAX, temp, NULL) > 0)
     if (_fullpath(temp, fileName.c_str(), PATH_MAX)) {
         replace_char(temp, '\\', '/');
         return std::string(temp);
@@ -563,7 +579,6 @@ File File::changeSuffix(const std::string& ext)
 
 std::string File::suffix() const
 {
-
     auto dot = fileName.find_last_of('.');
     if (dot != string::npos)
         return fileName.substr(dot);
