@@ -10,6 +10,7 @@
 #define NOGDI
 #include <curl/curl.h>
 #include <unistd.h>
+#include <cctype>
 #include <memory>
 #include <vector>
 #include <thread>
@@ -37,7 +38,16 @@ public:
 	int64_t contentLength() { return cLength; }
 	
 	std::string getHeader(const std::string &name) {
-		return headers[name];
+		auto it = headers.find(name);
+		if (it != headers.end()) return it->second;
+		auto wanted = name;
+		std::transform(wanted.begin(), wanted.end(), wanted.begin(), ::tolower);
+		for (const auto& header : headers) {
+			auto key = header.first;
+			std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+			if (key == wanted) return header.second;
+		}
+		return "";
 	}
 
 	utils::File file() {
@@ -394,4 +404,3 @@ private:
 } // namespace webutils
 
 #endif // WEBUTILS_WEB_H
-
