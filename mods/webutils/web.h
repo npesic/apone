@@ -149,7 +149,22 @@ public:
 	}
 
 	~Web() {
-		// Stop all in-flight jobs first so write callbacks return immediately.
+		// Signal quit FIRST, before acquiring m. This allows the run() thread —
+		// if it is currently holding m inside curl_multi_perform — to see the
+		// quit flag and exit its loop quickly once it releases m. Without this
+		// ordering, if a streaming write-callback is blocked in a FIFO put()
+		// while holding m, and that FIFO has already been quit() externally
+		// (e.g. by MusicPlayerList::~MusicPlayerList()), the put() will return
+		// promptly, the thread will release m, and the lock below will succeed.
+		quit = true;
+		if (curlm) {
+			curl_multi_wakeup(curlm);
+		}
+
+		// Stop all in-flight jobs. The run() thread releases m between
+		// curl_multi_perform iterations so this will complete without deadlock
+		// provided no streaming callback is permanently blocked (ensured by
+		// quitting the audio FIFOs before destroying RemoteLoader).
 		{
 			std::lock_guard<std::mutex> lock(m);
 			for (auto& job : jobs) {
@@ -158,12 +173,6 @@ public:
 					curl_multi_remove_handle(curlm, job->curl);
 				}
 			}
-		}
-
-		// Signal run() to exit and wake it immediately.
-		quit = true;
-		if (curlm) {
-			curl_multi_wakeup(curlm);
 		}
 
 		// JOIN — not detach. Detaching causes curl/audio races on destruction.
