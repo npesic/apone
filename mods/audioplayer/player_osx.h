@@ -2,6 +2,8 @@
 #define AUDIOPLAYER_OSX_H
 
 #include <AudioToolbox/AudioToolbox.h>
+#include <atomic>
+#include <cstring>
 #include <mutex>
 
 class InternalPlayer {
@@ -45,6 +47,7 @@ public:
     }
 
 	void pause(bool on) {
+		if(!aQueue) return;
 		if(on)
 			AudioQueuePause(aQueue);
 		else
@@ -52,6 +55,7 @@ public:
 	}
 
 	void set_volume(int volume) {
+		if(!aQueue) return;
 		float v = (float)volume / 100.f;
 		AudioQueueSetParameter(aQueue, kAudioQueueParam_Volume, v);
 	}
@@ -60,21 +64,58 @@ public:
 
 	static void fill_audio(void *ptr, AudioQueueRef aQueue, AudioQueueBuffer *buf) {
 		InternalPlayer *player = static_cast<InternalPlayer*>(ptr);
-        std::lock_guard<std::mutex> lock(player->callbackMutex);
-        if(player->callback) {
-            int count = buf->mAudioDataByteSize / 2;
-            int16_t *target = static_cast<int16_t*>(buf->mAudioData);
-            player->callback(target, count);
-        }
+		{
+			std::lock_guard<std::mutex> lock(player->callbackMutex);
+			if(!player->quit && player->callback) {
+				int count = buf->mAudioDataByteSize / 2;
+				int16_t *target = static_cast<int16_t*>(buf->mAudioData);
+				player->callback(target, count);
+			} else {
+				// No callback (or shutting down): emit silence.
+				memset(buf->mAudioData, 0, buf->mAudioDataByteSize);
+			}
+		}
 
-		OSStatus status = AudioQueueEnqueueBuffer(aQueue, buf, 0, NULL);
+		// Once teardown has begun, STOP recycling buffers. Re-enqueueing here
+		// while the destructor runs AudioQueueStop/AudioQueueDispose on the main
+		// thread is exactly what produced the multi-second beachball: the queue
+		// could never drain because every callback fed it another buffer.
+		if(player->quit) return;
+
+		AudioQueueEnqueueBuffer(aQueue, buf, 0, NULL);
 	}
 
 	int get_delay() const { return 1; }
 
 
 	~InternalPlayer() {
-		AudioQueueDispose(aQueue, true);
+		// 1. Mark teardown under the callback mutex. After this, any in-flight
+		//    fill_audio either already finished or will emit silence and will
+		//    NOT re-enqueue a buffer.
+		{
+			std::lock_guard<std::mutex> lock(callbackMutex);
+			quit = true;
+		}
+
+		if(aQueue) {
+			// 2. Stop the queue SYNCHRONOUSLY (immediate = true). CoreAudio
+			//    guarantees no further fill_audio callbacks run after this
+			//    returns, and it returns promptly because fill_audio no longer
+			//    recycles buffers. This bounded stop replaces relying on
+			//    AudioQueueDispose to untangle an actively-fed queue (which
+			//    beachballed the main thread for several seconds on quit).
+			AudioQueueStop(aQueue, true);
+
+			// 3. Drop the user callback now that nothing can invoke it.
+			{
+				std::lock_guard<std::mutex> lock(callbackMutex);
+				callback = nullptr;
+			}
+
+			// 4. Dispose the now-stopped, idle queue and its buffers.
+			AudioQueueDispose(aQueue, true);
+			aQueue = nullptr;
+		}
 	}
 
 	void writeAudio(int16_t *samples, int sampleCount) {
@@ -82,9 +123,9 @@ public:
 
 	std::function<void(int16_t *, int)> callback;
     std::mutex callbackMutex;
-	bool quit;
+	std::atomic<bool> quit;
 	int freq;
-	AudioQueueRef aQueue;
+	AudioQueueRef aQueue = nullptr;
 };
 
 #endif // AUDIOPLAYER_OSX_H
