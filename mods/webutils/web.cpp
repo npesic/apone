@@ -50,7 +50,7 @@ void WebJob::start(CURLM *curlm) {
 			while (i < escapedPath.size()) {
 				if (escapedPath.size() - i >= 3 &&
 				    escapedPath[i] == '%' &&
-				    (escapedPath[i+1] == '2' || escapedPath[i+1] == '2') &&
+				    escapedPath[i+1] == '2' &&
 				    (escapedPath[i+2] == 'F' || escapedPath[i+2] == 'f')) {
 					finalPath += '/';
 					i += 3;
