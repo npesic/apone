@@ -66,6 +66,10 @@ public:
 
 	void setStreamCallback(StreamFunc cb) { streamCb = cb; }
 
+	// Request an FTP directory listing (NLST) instead of a file transfer. The
+	// listing text is delivered via textResult()/the string callback.
+	void setDirList(bool b) { dirList = b; }
+
 	std::string textResult() const {
 		return std::string(data.begin(), data.end());
 	}
@@ -88,6 +92,7 @@ protected:
 	StreamFunc streamCb;
 	bool isDone = false;
 	bool stopped = false;
+	bool dirList = false;
 	int64_t cLength = 0;
 	std::thread::id tid;
 
@@ -145,6 +150,13 @@ public:
 		}
 		utils::makedirs(cacheDir);
 		curlm = curl_multi_init();
+		// Cap concurrent connections. A single song can enqueue dozens of
+		// companion fetches at once (e.g. an IFF-SMUS "Instruments/" folder has
+		// ~60 files); firing them all in parallel overwhelms the FTP server and
+		// many fail with response code 0. libcurl queues the overflow and starts
+		// each transfer as a slot frees, so all of them complete.
+		curl_multi_setopt(curlm, CURLMOPT_MAX_TOTAL_CONNECTIONS, 6L);
+		curl_multi_setopt(curlm, CURLMOPT_MAX_HOST_CONNECTIONS, 6L);
 		webThread = std::thread{&Web::run, this};
 	}
 
@@ -255,6 +267,19 @@ public:
 	template <typename FX> std::shared_ptr<WebJob> get(const std::string &url, FX cb) {
 		auto job = std::make_shared<WebJobImpl<FX, decltype(&FX::operator())>>(cb);
 		job->setUrl(url);
+		job->start(curlm);
+		jobs.push_back(job);
+		return job;
+	}
+
+	// Fetch an FTP directory listing (bare NLST). The listing text is delivered
+	// to the string callback. The result is held in memory (no cache file) since
+	// listings are small and volatile.
+	template <typename FX> std::shared_ptr<WebJob> listDir(const std::string &url, FX cb) {
+		auto job = std::make_shared<WebJobImpl<FX, decltype(&FX::operator())>>(cb);
+		job->setUrl(url);
+		job->setDirList(true);
+		std::lock_guard<std::mutex> lock(m);
 		job->start(curlm);
 		jobs.push_back(job);
 		return job;

@@ -87,6 +87,11 @@ void WebJob::start(CURLM *curlm) {
 	// Optimization to eliminate sequential step-by-step CWD roundtrip stalls on deep FTP paths
 	curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, CURLFTPMETHOD_NOCWD);
 	curl_easy_setopt(curl, CURLOPT_FTP_USE_EPSV, 1L);
+	// Directory-listing jobs (FTP NLST): return bare entries, not a file body.
+	// With NOCWD the server echoes full paths; the caller strips to basenames.
+	if (dirList) {
+		curl_easy_setopt(curl, CURLOPT_DIRLISTONLY, 1L);
+	}
 	// Suppress the FTP SIZE command — costs ~500ms round-trip per transfer.
 	curl_easy_setopt(curl, CURLOPT_IGNORE_CONTENT_LENGTH, 1L);
 
