@@ -31,6 +31,7 @@ public:
 	bool isDone() const;
 	int getReturnCode() const;
 	std::string getFile() const;
+	std::string getDetectedFilename() const { return detectedFilename; }
 	const std::vector<uint8_t>& getData() const { return data; }
 	void urlStream(const std::string &url, std::function<void(uint8_t*, int)> cb);
 	void urlGet(const std::string &url);
@@ -52,6 +53,7 @@ private:
 	std::vector<uint8_t> data;
 	int32_t datapos;
 	std::string target;
+	std::string detectedFilename;
 	std::function<void(uint8_t *ptr, int size)> streamCallback;
 };
 
@@ -195,6 +197,18 @@ size_t WebGetter::Job::headerFunc(void *ptr, size_t size, size_t nmemb, void *us
 		job->target = job->targetDir + "/" + newTarget;
 		if(job->file)
 			job->file = make_unique<File>(job->target +".download", File::WRITE);
+	} else
+	if(line.substr(0, 20) == "Content-Disposition:") {
+		string cd = line.substr(20);
+		size_t pos = cd.find("filename=");
+		if (pos != string::npos) {
+			string filename = cd.substr(pos + 9);
+			if (filename.size() >= 2 && filename.front() == '"' && filename.back() == '"') {
+				filename = filename.substr(1, filename.size() - 2);
+			}
+			LOGD("Detected filename from Content-Disposition: %s", filename);
+			job->detectedFilename = filename;
+		}
 	}
 
 	return size *nmemb;
