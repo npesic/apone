@@ -188,9 +188,18 @@ void WebJob::finish() {
 		} else {
 			targetFile.close();
 			if(orgFile) {
-				if(orgFile.exists())
-					orgFile.remove();
-				targetFile.rename(orgFile);
+				if(targetFile.exists()) {
+					if(orgFile.exists())
+						orgFile.remove();
+					targetFile.rename(orgFile);
+				} else {
+					// Job was cancelled mid-transfer: writeFunc already removed
+					// the temp .download file even though the HTTP status was
+					// 200. There is nothing to rename, and renaming a missing
+					// file throws io_exception, which is uncaught on this worker
+					// thread and terminates the whole app. Just clean up.
+					targetFile = utils::File();
+				}
 			}
 		}
 	}
