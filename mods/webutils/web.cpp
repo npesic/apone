@@ -1,6 +1,68 @@
 #include "web.h"
 
+#include <array>
+#include <map>
+#include <random>
+
 namespace webutils {
+
+// Extract the "host[:port]" authority from a URL, lowercased. Returns the whole
+// string if it has no scheme/authority (defensive — keeps the host map keyed on
+// *something* stable rather than crashing on odd inputs).
+static std::string hostOf(const std::string &url) {
+	auto schemeEnd = url.find("://");
+	size_t start = (schemeEnd == std::string::npos) ? 0 : schemeEnd + 3;
+	auto end = url.find('/', start);
+	std::string host = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+	// Drop any userinfo@ prefix.
+	auto at = host.find('@');
+	if (at != std::string::npos)
+		host = host.substr(at + 1);
+	std::transform(host.begin(), host.end(), host.begin(), ::tolower);
+	return host;
+}
+
+// Return a realistic, current-ish browser User-Agent for the given host. The UA
+// is chosen at random the first time we contact a host, then kept stable for the
+// rest of the session (process lifetime). This is more convincing than rotating
+// per request: a real browser presents one consistent identity to a given
+// server, and many different UAs hammering one server from one IP is itself a
+// tell. Different runs still get different identities (the RNG is seeded fresh).
+static const char* pickUserAgent(const std::string &url) {
+	static const std::array<const char*, 8> agents = {{
+		// macOS Safari
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+		// macOS Chrome
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		// macOS Firefox
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
+		// Windows 10 Chrome
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		// Windows 10 Edge
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.2420.97",
+		// Windows 10 Firefox
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+		// Linux Chrome
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+		// iPhone Safari
+		"Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+	}};
+
+	// host -> chosen UA index, shared across all worker threads, so guard it.
+	static std::mutex hostMutex;
+	static std::map<std::string, size_t> hostAgent;
+	static std::mt19937 rng{std::random_device{}()};
+
+	std::string host = hostOf(url);
+
+	std::lock_guard<std::mutex> lock(hostMutex);
+	auto it = hostAgent.find(host);
+	if (it == hostAgent.end()) {
+		std::uniform_int_distribution<size_t> dist(0, agents.size() - 1);
+		it = hostAgent.emplace(host, dist(rng)).first;
+	}
+	return agents[it->second];
+}
 
 std::atomic<int> Web::runningWebJobs(0);
 std::mutex Web::sm;
@@ -66,11 +128,30 @@ void WebJob::start(CURLM *curlm) {
 		u = utils::urlencode(url, " #()");
 	}
 
+	// A radio stream is the only case that needs the SHOUTcast/Icecast-specific
+	// headers (Icy-MetaData + the "ICY 200 OK" status-line alias) and HTTP/1.0.
+	// Plain file/page downloads don't, so for those we send a header set that
+	// looks like an ordinary web browser instead of a media player. That audio
+	// Accept list and the Icy header are a dead giveaway that the client is an
+	// automated player, so we only emit them when actually streaming radio.
+	bool isStream = static_cast<bool>(streamCb);
+
 	curl_slist *slist = NULL;
 
-	slist = curl_slist_append(slist, "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-	slist = curl_slist_append(slist, "Icy-MetaData: 1");
-	slist = curl_slist_append(slist, "Accept: audio/mpeg, audio/x-mpeg, audio/mp3, audio/x-mp3, audio/mpeg3, audio/x-mpeg3, audio/mpg, audio/x-mpg, audio/x-mpegaudio, application/octet-stream, audio/mpegurl, audio/mpeg-url, audio/x-mpegurl, audio/x-scpls, audio/scpls, application/pls, application/x-scpls, */*");  
+	std::string uaHeader = std::string("User-Agent: ") + pickUserAgent(url);
+	slist = curl_slist_append(slist, uaHeader.c_str());
+
+	if (isStream) {
+		// Radio streaming: keep the player-style headers the servers expect.
+		slist = curl_slist_append(slist, "Icy-MetaData: 1");
+		slist = curl_slist_append(slist, "Accept: audio/mpeg, audio/x-mpeg, audio/mp3, audio/x-mp3, audio/mpeg3, audio/x-mpeg3, audio/mpg, audio/x-mpg, audio/x-mpegaudio, application/octet-stream, audio/mpegurl, audio/mpeg-url, audio/x-mpegurl, audio/x-scpls, audio/scpls, application/pls, application/x-scpls, */*");
+	} else {
+		// Ordinary download: mimic a real browser's request headers. These are
+		// the headers every mainstream browser sends regardless of vendor, so
+		// they stay consistent with whichever UA pickUserAgent() returned.
+		slist = curl_slist_append(slist, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+		slist = curl_slist_append(slist, "Accept-Language: en-US,en;q=0.9");
+	}
 	header_list = std::shared_ptr<curl_slist>(slist, &curl_slist_free_all);
 
 	slist = NULL;
@@ -95,8 +176,19 @@ void WebJob::start(CURLM *curlm) {
 	// Suppress the FTP SIZE command — costs ~500ms round-trip per transfer.
 	curl_easy_setopt(curl, CURLOPT_IGNORE_CONTENT_LENGTH, 1L);
 
-	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
-	curl_easy_setopt(curl, CURLOPT_HTTP200ALIASES, alias_list.get());
+	if (isStream) {
+		// SHOUTcast servers answer with "ICY 200 OK" over HTTP/1.0.
+		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
+		curl_easy_setopt(curl, CURLOPT_HTTP200ALIASES, alias_list.get());
+	} else {
+		// Browsers speak HTTP/1.1+; HTTP/1.0 alone is a tell. Let curl negotiate
+		// up to HTTP/2 when the server offers it.
+		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+		// Advertise and transparently decode the compression a browser would
+		// (passing "" lets libcurl send everything it was built with and inflate
+		// the response for us, so callers still see plain bytes).
+		curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+	}
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
