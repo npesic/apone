@@ -376,9 +376,12 @@ public:
 	bool inCache(const std::string &url) const {
 		auto slash = url.find_last_of('/');
 		auto fileName = url.substr(slash+1);
-		fileName = utils::urlencode(fileName, ":/\\?;");
+		// Must match the exact encode set used by getFile() when the file was
+		// stored (note the trailing '!'); otherwise URLs containing '!' resolve
+		// to a different cache name here and a cached file is reported missing.
+		fileName = utils::urlencode(fileName, ":/\\?;!");
 		auto pathName = url.substr(0, slash);
-		auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;");
+		auto urlPart = utils::urlencode(baseUrl + pathName, ":/\\?;!");
 		auto target = cacheDir / urlPart / fileName;
 		return utils::File::exists(target);
 	}
