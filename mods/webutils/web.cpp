@@ -182,8 +182,17 @@ void WebJob::start(CURLM *curlm) {
 		curl_easy_setopt(curl, CURLOPT_HTTP200ALIASES, alias_list.get());
 	} else {
 		// Browsers speak HTTP/1.1+; HTTP/1.0 alone is a tell. Let curl negotiate
-		// up to HTTP/2 when the server offers it.
-		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+		// up to HTTP/2 when the server offers it -- EXCEPT for zxart.ee. libcurl's
+		// HTTP/2 connection-cache pruning (prune_dead_connections ->
+		// http2_data_done -> Curl_bufq_free) corrupts the heap and crashes
+		// (EXC_BAD_ACCESS / "pointer being freed was not allocated") when a stale
+		// HTTP/2 connection is pruned as a new transfer starts -- reliably hit by a
+		// zxart.ee HTTPS fetch immediately followed by an FTP modland fetch on the
+		// same multi handle. Pin ONLY zxart to HTTP/1.1 (it serves it fine); every
+		// other host keeps HTTP/2 so e.g. web.archive.org screenshots are unaffected.
+		bool zxart = (u.find("zxart.ee") != std::string::npos);
+		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION,
+		                 zxart ? CURL_HTTP_VERSION_1_1 : CURL_HTTP_VERSION_2TLS);
 		// Advertise and transparently decode the compression a browser would
 		// (passing "" lets libcurl send everything it was built with and inflate
 		// the response for us, so callers still see plain bytes).
