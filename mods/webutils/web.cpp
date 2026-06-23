@@ -317,7 +317,10 @@ void WebJob::finish() {
 		streamCb(*this, nullptr, 0);
 	call_handler();
 	targetFile = utils::File();
-	destroy();
+	// NOTE: the curl easy handle is freed by the caller (Web::run) under m,
+	// right after this returns. Do NOT curl_easy_cleanup() here: finish() runs
+	// outside m so the user callback above can re-enter Web, but freeing the
+	// handle must be serialized against curl_multi_add_handle()/perform().
 }
 
 void WebJob::destroy() {
