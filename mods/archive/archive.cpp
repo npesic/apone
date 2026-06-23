@@ -47,7 +47,11 @@ public:
 	File extract(const string &name) {
 
 		File file(workDir + "/" + name);
-		mz_zip_reader_extract_file_to_file(&zipArchive, name.c_str(), workDir.c_str(), 0);
+		// NB: the 3rd arg is the destination FILE path, not a directory -- passing
+		// workDir here wrote every member onto the dir itself (a no-op/failure), so
+		// the extracted file never appeared at getName(). Use the full file path.
+		mz_zip_reader_extract_file_to_file(&zipArchive, name.c_str(),
+		                                   file.getName().c_str(), 0);
 		return file;
 
 		/*int i = zip_name_locate(zipFile, name.c_str(), ZIP_FL_NOCASE);
