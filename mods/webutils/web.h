@@ -26,7 +26,19 @@ class Web;
 
 class WebJob {
 public:
+	WebJob() = default;
 	virtual ~WebJob() = default;
+	// `stopped` is std::atomic, which deletes the implicit copy ctor. A WebJob is
+	// still copied by value into user callbacks that take `WebJob` (see the
+	// WebJobImpl<...(WebJob) const> specialization -> cb(*this)), as a read-only
+	// snapshot (code()/file()/getHeader()). Restore that copy, snapshotting the
+	// flag's value. Copy-assignment stays deleted (never used).
+	WebJob(const WebJob& o)
+	    : curl(o.curl), headers(o.headers), url(o.url), data(o.data),
+	      targetFile(o.targetFile), orgFile(o.orgFile), streamCb(o.streamCb),
+	      isDone(o.isDone), stopped(o.stopped.load()), dirList(o.dirList),
+	      cLength(o.cLength), tid(o.tid), header_list(o.header_list),
+	      alias_list(o.alias_list) {}
 	bool done() const { return isDone; }
 	long code() const {
 		long rc = -1;
@@ -91,7 +103,9 @@ protected:
 	utils::File orgFile;
 	StreamFunc streamCb;
 	bool isDone = false;
-	bool stopped = false;
+	// Written by stop() (player thread via RemoteLoader::cancel) and read by
+	// writeFunc() (web thread) — must be atomic to avoid a data race on abort.
+	std::atomic<bool> stopped{false};
 	bool dirList = false;
 	int64_t cLength = 0;
 	std::thread::id tid;
@@ -232,6 +246,18 @@ public:
 						auto it = jobs.begin();
 						while (it != jobs.end()) {
 							if ((*it)->curl == msg->easy_handle) {
+								// Detach the finished/aborted handle from the multi
+								// NOW, while we hold m. The easy handle itself is
+								// freed further below (destroy(), also under m); the
+								// user callbacks run in between WITHOUT m and may
+								// re-enter Web. If the handle were still attached
+								// when freed, curl_easy_cleanup() would mutate the
+								// multi's transfer list concurrently with a
+								// curl_multi_add_handle() from streamData()/getFile()
+								// on the player thread -> heap corruption (reliably
+								// hit by aborting a large in-flight stream while the
+								// next track's transfer is starting).
+								curl_multi_remove_handle(curlm, msg->easy_handle);
 								completedJobs.push_back(*it);
 								it = jobs.erase(it);
 								break;
@@ -246,6 +272,18 @@ public:
 			// Execute user and hardware callbacks completely safe from cross-thread mutex recursion
 			for (auto& finishedJob : completedJobs) {
 				finishedJob->finish();
+			}
+			// Free the curl easy handles only now, back under m. finish() ran the
+			// user callbacks WITHOUT m (they may queue more transfers), but
+			// curl_easy_cleanup() touches connection-cache/global state shared with
+			// curl_multi_add_handle()/perform() on other threads and must be
+			// serialized. The handles were already detached from the multi above,
+			// so this is a pure easy-handle free.
+			if (!completedJobs.empty()) {
+				std::lock_guard<std::mutex> lock(m);
+				for (auto& finishedJob : completedJobs) {
+					finishedJob->destroy();
+				}
 			}
 			completedJobs.clear();
 
