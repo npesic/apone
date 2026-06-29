@@ -45,7 +45,7 @@ void focus_fn(GLFWwindow *gwin, int focus) {
 }
 
 static void scroll_fn(GLFWwindow *gwin, double x, double y) {
-	LOGD("SCROLL %f, %f", x, y);
+	//LOGD("SCROLL %f, %f", x, y);
 	Window::scroll_buffer.push_back(Window::Scroll(x,y));
 }
 
