@@ -47,6 +47,24 @@ public:
 	File extract(const string &name) {
 
 		File file(workDir + "/" + name);
+		// A zip directory entry (name ends with '/') is not a file: extracting it
+		// would drop a 0-byte FILE where a folder belongs, so a sibling member
+		// like "dir/song.mp3" then fails to write ("Not a directory"). Skip it.
+		if (!name.empty() && name.back() == '/')
+			return file;
+		// Members can be nested in folders (e.g. "Atari 2600 Music Compo/x.mp3").
+		// mz_zip_reader_extract_file_to_file does NOT create intermediate dirs, so
+		// make the parent first or the extract silently fails and the file never
+		// appears at getName().
+		auto parent = utils::path_directory(file.getName());
+		// A previous (buggy) run that extracted the folder's own dir entry left a
+		// 0-byte FILE where this parent directory belongs; drop it so makedirs can
+		// create the real dir (otherwise mkdir keeps failing and the member never
+		// extracts -> "Not a directory" at play time).
+		if (!parent.empty() && utils::File::exists(parent) &&
+		    !utils::File(parent).isDir())
+			utils::File::remove(parent);
+		utils::makedirs(parent);
 		// NB: the 3rd arg is the destination FILE path, not a directory -- passing
 		// workDir here wrote every member onto the dir itself (a no-op/failure), so
 		// the extracted file never appeared at getName(). Use the full file path.
@@ -182,15 +200,20 @@ private:
 
 
 Archive *Archive::open(const std::string &fileName, const std::string &targetDir, int type) {
-	if(type == TYPE_ZIP || utils::endsWith(fileName, ".zip"))
+	// Match the extension case-insensitively: web caches name files after the
+	// source URL, so an uppercase ".ZIP" (e.g. modland/Fujiology "SMELLS.ZIP")
+	// must still open. A case-sensitive endsWith(".zip") returned nullptr here,
+	// and callers that detected the archive by magic then dereferenced it.
+	auto lower = utils::toLower(fileName);
+	if(type == TYPE_ZIP || utils::endsWith(lower, ".zip"))
 		return new ZipFile(fileName, targetDir);
-	else if(type == TYPE_RAR || utils::endsWith(fileName, ".rar"))
+	else if(type == TYPE_RAR || utils::endsWith(lower, ".rar"))
 		return new RarFile(fileName, targetDir);
 	return nullptr;
 }
 
 bool Archive::canHandle(const std::string &name) {
-	return utils::endsWith(name, ".zip");
+	return utils::endsWith(utils::toLower(name), ".zip");
 }
 
 } // namespace utils
