@@ -157,6 +157,31 @@ public:
         return p;
     }
 
+    // Collapse "." and ".." segments lexically (no filesystem access), e.g.
+    // "build/../chipmachine/data" -> "chipmachine/data". For an absolute path a
+    // ".." at the root is dropped; for a relative path a leading ".." that can't
+    // be resolved is preserved.
+    path lexically_normal() const
+    {
+        path p = *this;
+        std::vector<std::string> out;
+        for (auto const& seg : segments) {
+            if (seg == ".") continue;
+            if (seg == "..") {
+                if (!out.empty() && out.back() != "..") {
+                    out.pop_back();
+                } else if (isRelative) {
+                    out.push_back("..");
+                }
+                // absolute: a ".." at the root has nowhere to go -> drop it
+                continue;
+            }
+            out.push_back(seg);
+        }
+        p.segments = std::move(out);
+        return p;
+    }
+
     bool empty() const { return segments.empty(); }
 
     auto begin() const { return segments.begin(); }

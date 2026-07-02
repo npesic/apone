@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <unordered_map>
 #include <functional>
+#include <chrono>
+#include <thread>
 #include <GLFW/glfw3.h>
 
 //#include <math.h>
@@ -45,7 +47,7 @@ void focus_fn(GLFWwindow *gwin, int focus) {
 }
 
 static void scroll_fn(GLFWwindow *gwin, double x, double y) {
-	LOGD("SCROLL %f, %f", x, y);
+	//LOGD("SCROLL %f, %f", x, y);
 	Window::scroll_buffer.push_back(Window::Scroll(x,y));
 }
 
@@ -323,29 +325,14 @@ void Window::close() {
 
 void Window::flip() {
 
-	//auto t = chrono::high_resolution_clock::now();
+#ifdef FPS_COUNTER
 	auto tm = utils::getms();
 	auto d = tm - lastTime;
 	lastTime = tm;
-
-	if(d < 8)
-		utils::sleepms(8);
-
-#ifdef FPS_COUNTER
 	if(d > 0)
 		fps = fps * 0.8 + (1000 / d) * 0.2;
 	text(utils::format("%d", (int)fps), 0,0);
 #endif
-	/*if(bmCounter) {
-		bmCounter--;
-		if(!bmCounter) {
-			glfwCloseWindow();
-			winOpen = false;
-			auto ms = chrono::duration_cast<chrono::microseconds>(t - benchStart).count();
-			fprintf(stderr, "TIME: %ldus per frame\n", ms / 100);
-		}
-		return;
-	}*/
 
 	if(!gwindow)
 		return;
@@ -354,6 +341,39 @@ void Window::flip() {
 	glfwPollEvents();
 	if(glfwWindowShouldClose(gwindow)) {
 		close();
+	}
+
+	// --- Precise frame pacing ------------------------------------------------
+	// glfwSwapInterval(1) is requested, but the legacy NSOpenGL-on-Metal path on
+	// macOS does not reliably block on the vertical blank, so the loop free-runs
+	// with irregular timing. The old `if(d<8) sleepms(8)` cap made it worse: a
+	// coarse, jittery pre-swap delay that beat against the 16.67ms vblank, so
+	// frames randomly missed a refresh -> visible scroll judder. Instead, pace
+	// the loop to the display's real refresh interval with a high-resolution
+	// clock: sleep to ~1ms short of the next boundary, then spin the remainder
+	// for a tight, steady cadence. Combined with delta-timed animation this is
+	// what keeps the scroll smooth.
+	using namespace std::chrono;
+	static long long intervalNs = 0;
+	if(intervalNs == 0) {
+		int hz = 60;
+		if(auto* mon = glfwGetPrimaryMonitor())
+			if(auto* vm = glfwGetVideoMode(mon))
+				if(vm->refreshRate > 0) hz = vm->refreshRate;
+		intervalNs = 1000000000LL / hz;
+	}
+	static steady_clock::time_point next = steady_clock::now();
+	next += nanoseconds(intervalNs);
+	auto now = steady_clock::now();
+	if(next <= now) {
+		// Fell behind (a long stall / first frame): resync rather than burst a
+		// run of catch-up frames.
+		next = now;
+	} else {
+		auto coarse = next - milliseconds(1);
+		if(coarse > now)
+			std::this_thread::sleep_until(coarse);
+		while(steady_clock::now() < next) { /* short spin for precision */ }
 	}
 
 	//auto ms = chrono::duration_cast<chrono::microseconds>(t - startTime).count();
